@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # --------------------------------------------------------------------------------
-# 2. 데이터 수집 및 전처리 함수
+# 2. 데이터 수집 함수
 # --------------------------------------------------------------------------------
 def clean_html(raw_html):
     cleanr = re.compile('<.*?>')
@@ -26,7 +26,7 @@ def get_naver_data_communities(keyword, client_id, client_secret):
     if not client_id or not client_secret:
         return None
     
-    categories = ["cafearticle", "blog"] # 카페 우선 검색
+    categories = ["cafearticle", "blog"]
     all_data = []
     
     today = datetime.datetime.now()
@@ -35,8 +35,8 @@ def get_naver_data_communities(keyword, client_id, client_secret):
     status_text = st.empty() 
     
     for cat in categories:
-        # 최대 10페이지(1000개) 탐색
         for start_index in range(1, 1000, 100):
+            # [수정] try 구문 시작
             try:
                 status_text.text(f"🔍 {cat} 데이터를 {start_index}번부터 긁어오는 중...")
                 
@@ -65,17 +65,4 @@ def get_naver_data_communities(keyword, client_id, client_secret):
                             
                         if p_date < cutoff_date:
                             stop_flag = True
-                            continue 
-                        
-                        # --- [핵심] 커뮤니티 이름 정규화 (매핑) ---
-                        raw_name = item.get('cafename', '') # 블로그는 이 값이 없음
-                        source_label = "기타"
-                        
-                        if cat == "blog":
-                            source_label = "블로그"
-                        else:
-                            # 우리가 찾는 4대 천왕인지 확인
-                            if "고양이라서 다행이야" in raw_name:
-                                source_label = "고다 (고양이라서 다행이야)"
-                            elif "냥이네" in raw_name:
-                                source_
+                            continue
