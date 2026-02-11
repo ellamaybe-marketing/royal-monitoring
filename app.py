@@ -7,8 +7,8 @@ import re
 
 # 1. 페이지 설정
 st.set_page_config(
-    page_title="Royal Canin Monitor (Clean)",
-    page_icon="✨",
+    page_title="Royal Canin Smart Monitor",
+    page_icon="🧠",
     layout="wide"
 )
 
@@ -18,30 +18,40 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html)
     return cleantext.replace("&quot;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
-# 3. 데이터 수집 함수 (30일 지난 글은 자동 폐기)
-def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
+# 3. 데이터 수집 함수 (제외 단어 로직 추가)
+def get_naver_data_smart(keyword_string, exclude_string, client_id, client_secret):
     if not client_id or not client_secret:
         return None, []
     
+    # 검색어 리스트
     keywords = [k.strip() for k in keyword_string.split(',') if k.strip()]
+    
+    # [NEW] 제외어 리스트 (예: ㄹㅇㅋㄴ, 광고)
+    excludes = [e.strip() for e in exclude_string.split(',') if e.strip()]
+    
     category = "cafearticle"
     all_data = []
     log_messages = []
     
     status_area = st.empty()
     
-    # [핵심] 오늘 날짜와 30일 전 날짜 계산
+    # 30일 유통기한 설정
     now = datetime.datetime.now()
-    cutoff_date = now - datetime.timedelta(days=30) # 유통기한 30일
+    cutoff_date = now - datetime.timedelta(days=30)
     
     for idx, search_term in enumerate(keywords):
-        # 키워드당 3페이지씩 수집
         for start_index in range(1, 300, 100):
             try:
-                status_area.info(f"🧹 ({idx+1}/{len(keywords)}) '{search_term}' 최신글 수집 중... (오래된 글은 버림)")
+                status_area.info(f"🕵️ ({idx+1}/{len(keywords)}) 키워드 '{search_term}' 탐색 중...")
                 
-                encText = urllib.parse.quote(search_term)
-                # sort=date (최신순)
+                # [핵심] 검색어 뒤에 제외어 붙이기 (네이버 검색 연산자 '-' 사용)
+                # 예: "로얄캐닌 -ㄹㅇㅋㄴ -광고"
+                query_str = search_term
+                if excludes:
+                    for exc in excludes:
+                        query_str += f" -{exc}"
+                
+                encText = urllib.parse.quote(query_str)
                 url = f"https://openapi.naver.com/v1/search/{category}?query={encText}&display=100&start={start_index}&sort=date"
                 
                 request = urllib.request.Request(url)
@@ -63,15 +73,11 @@ def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
                             if raw_date:
                                 p_date = pd.to_datetime(raw_date, format='%Y%m%d')
                             else:
-                                # 날짜 없으면 1900년 (얘는 최신글로 쳐줌)
                                 p_date = pd.to_datetime('1900-01-01')
                         except:
                             p_date = pd.to_datetime('1900-01-01')
                         
-                        # -----------------------------------------------------------
-                        # [핵심 필터] 30일보다 오래된 글이면 -> 저장 안 하고 건너뜀!
-                        # (단, 날짜가 1900년인 건 '날짜미상 최신글'일 수 있으니 살려둠)
-                        # -----------------------------------------------------------
+                        # 30일 필터 (1900년은 통과)
                         if p_date.year > 2000 and p_date < cutoff_date:
                             continue 
                         
@@ -95,7 +101,7 @@ def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
                 log_messages.append(f"❌ 에러: {e}")
                 break
             
-    status_area.success(f"✅ 최근 30일 데이터만 {len(all_data)}건 확보 완료!")
+    status_area.success(f"✅ 수집 완료! (총 {len(all_data)}건 발견)")
     
     if not all_data:
         return pd.DataFrame(), log_messages
@@ -116,7 +122,7 @@ def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
     # 중복 제거
     df = df.drop_duplicates(['clean_title'])
     
-    # [정렬] 날짜순 (1900년은 '현재'로 취급해서 맨 위로)
+    # 정렬 (최신순)
     df['sort_helper'] = df['postdate_dt'].apply(lambda x: now if x.year == 1900 else x)
     df = df.sort_values(by='sort_helper', ascending=False)
     
@@ -124,10 +130,15 @@ def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
 
 # 4. UI 구성
 with st.sidebar:
-    st.header("✨ 최근 30일 모니터링")
+    st.header("🕸️ 스마트 모니터링")
     
-    default_keywords = "로얄캐닌, 로캐, 로케, ㄹㅇㅋㄴ"
+    # [수정] 기본 검색어에서 'ㄹㅇㅋㄴ' 제거, '로캐/로케' 포함
+    default_keywords = "로얄캐닌, 로캐, 로케"
     keyword_input = st.text_input("검색어 (콤마 구분)", value=default_keywords)
+    
+    # [NEW] 제외할 단어 입력칸
+    st.caption("🚫 제외할 단어 (결과에서 빼버림)")
+    exclude_input = st.text_input("제외어 입력", value="ㄹㅇㅋㄴ, 광고, 분양, 팝니다")
     
     st.markdown("---")
     st.caption("카페 필터")
@@ -137,15 +148,16 @@ with st.sidebar:
     st.markdown("---")
     client_id = st.text_input("Client ID", type="password")
     client_secret = st.text_input("Secret", type="password")
-    run_btn = st.button("최신 데이터만 가져오기")
+    run_btn = st.button("모니터링 시작")
 
-st.title(f"✨ '{keyword_input}' 클린 타임라인 (30일 이내)")
+st.title(f"🕸️ '{keyword_input}' 스마트 타임라인")
 
 if run_btn:
     if not client_id or not client_secret:
         st.error("⚠️ API 키를 입력해주세요.")
     else:
-        df, logs = get_naver_data_clean_sorted(keyword_input, client_id, client_secret)
+        # [수정] 함수에 제외어(exclude_input)도 같이 전달
+        df, logs = get_naver_data_smart(keyword_input, exclude_input, client_id, client_secret)
         
         with st.expander("ℹ️ 로그 확인"):
             if logs:
@@ -205,7 +217,9 @@ if run_btn:
             
             with tab2:
                 if not filtered_df.empty:
+                    st.write("🔎 **어떤 검색어로 많이 걸렸나요?** (중복 제거 후)")
                     st.bar_chart(filtered_df['search_keyword'].value_counts())
+                    st.caption("※ '로얄캐닌'과 '로캐'가 같이 있는 글은 '로얄캐닌'으로 먼저 집계되어 '로캐' 카운트가 적어 보일 수 있습니다.")
 
             with tab3:
                 display = filtered_df.copy()
@@ -222,8 +236,8 @@ if run_btn:
             st.download_button(
                 label="📥 엑셀 다운로드",
                 data=csv,
-                file_name=f"clean_monitoring.csv",
+                file_name=f"smart_monitoring.csv",
                 mime="text/csv",
             )
         else:
-            st.warning("최근 30일 내에 작성된 글이 없습니다.")
+            st.warning("조건에 맞는 데이터가 없습니다.")
