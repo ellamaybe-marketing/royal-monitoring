@@ -7,8 +7,8 @@ import re
 
 # 1. 페이지 설정
 st.set_page_config(
-    page_title="Royal Canin Multi-Keyword Monitor",
-    page_icon="🕸️",
+    page_title="Royal Canin Monitor (Clean)",
+    page_icon="✨",
     layout="wide"
 )
 
@@ -18,29 +18,30 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html)
     return cleantext.replace("&quot;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
-# 3. 데이터 수집 함수 (다 모아서 마지막에 줄세우기)
-def get_naver_data_multi_sorted(keyword_string, client_id, client_secret):
+# 3. 데이터 수집 함수 (30일 지난 글은 자동 폐기)
+def get_naver_data_clean_sorted(keyword_string, client_id, client_secret):
     if not client_id or not client_secret:
         return None, []
     
-    # 입력받은 검색어들을 리스트로 만듦
     keywords = [k.strip() for k in keyword_string.split(',') if k.strip()]
-    
     category = "cafearticle"
     all_data = []
     log_messages = []
     
     status_area = st.empty()
     
-    # [1] 각 검색어별로 데이터 수집
+    # [핵심] 오늘 날짜와 30일 전 날짜 계산
+    now = datetime.datetime.now()
+    cutoff_date = now - datetime.timedelta(days=30) # 유통기한 30일
+    
     for idx, search_term in enumerate(keywords):
-        # 키워드당 3페이지(300개)씩 수집
+        # 키워드당 3페이지씩 수집
         for start_index in range(1, 300, 100):
             try:
-                status_area.info(f"🏃 ({idx+1}/{len(keywords)}) 키워드 '{search_term}' 수집 중... (Page {int(start_index/100)+1})")
+                status_area.info(f"🧹 ({idx+1}/{len(keywords)}) '{search_term}' 최신글 수집 중... (오래된 글은 버림)")
                 
                 encText = urllib.parse.quote(search_term)
-                # sort=date (API에게도 최신순 요청)
+                # sort=date (최신순)
                 url = f"https://openapi.naver.com/v1/search/{category}?query={encText}&display=100&start={start_index}&sort=date"
                 
                 request = urllib.request.Request(url)
@@ -62,10 +63,17 @@ def get_naver_data_multi_sorted(keyword_string, client_id, client_secret):
                             if raw_date:
                                 p_date = pd.to_datetime(raw_date, format='%Y%m%d')
                             else:
-                                # 날짜 없으면 1900년 (나중에 '현재'로 취급해서 정렬할 예정)
+                                # 날짜 없으면 1900년 (얘는 최신글로 쳐줌)
                                 p_date = pd.to_datetime('1900-01-01')
                         except:
                             p_date = pd.to_datetime('1900-01-01')
+                        
+                        # -----------------------------------------------------------
+                        # [핵심 필터] 30일보다 오래된 글이면 -> 저장 안 하고 건너뜀!
+                        # (단, 날짜가 1900년인 건 '날짜미상 최신글'일 수 있으니 살려둠)
+                        # -----------------------------------------------------------
+                        if p_date.year > 2000 and p_date < cutoff_date:
+                            continue 
                         
                         # 카페 이름 매칭
                         raw_name = item.get('cafename', '')
@@ -82,21 +90,19 @@ def get_naver_data_multi_sorted(keyword_string, client_id, client_secret):
                         item['search_keyword'] = search_term 
                         all_data.append(item)
                 else:
-                    log_messages.append(f"❌ '{search_term}' 수집 실패")
                     break
             except Exception as e:
                 log_messages.append(f"❌ 에러: {e}")
                 break
             
-    status_area.success(f"✅ 총 {len(all_data)}개 글 수집 및 정렬 완료!")
+    status_area.success(f"✅ 최근 30일 데이터만 {len(all_data)}건 확보 완료!")
     
     if not all_data:
         return pd.DataFrame(), log_messages
 
     df = pd.DataFrame(all_data)
     
-    # [2] 위험 키워드 분석
-    # 요청하신 '로캐, 로케, ㄹㅇㅋㄴ, 벌레, 이물, 구더기, 회수' 등은 검색어로 이미 썼거나 여기서 체크
+    # 위험 키워드
     risk_keywords = ['벌레', '이물', '구더기', '회수', '식약처', '신고', '환불', '토해', '설사', '혈변', '곰팡이', '충격', '실망', '배신', '리콜']
     
     def check_risk(text):
@@ -107,28 +113,21 @@ def get_naver_data_multi_sorted(keyword_string, client_id, client_secret):
 
     df['risk_level'] = df['clean_desc'].apply(check_risk)
     
-    # [3] 중복 제거
+    # 중복 제거
     df = df.drop_duplicates(['clean_title'])
     
-    # [4] ★ 핵심: 전체 데이터 날짜순 정렬 (Global Sort) ★
-    # 날짜가 없는(1900년) 데이터는 '지금 막 올라온 글'로 간주하여 맨 위로 올림
-    now = datetime.datetime.now()
-    
-    # 정렬을 위한 임시 컬럼 생성
+    # [정렬] 날짜순 (1900년은 '현재'로 취급해서 맨 위로)
     df['sort_helper'] = df['postdate_dt'].apply(lambda x: now if x.year == 1900 else x)
-    
-    # 임시 컬럼 기준으로 내림차순(최신순) 정렬
     df = df.sort_values(by='sort_helper', ascending=False)
     
     return df[['postdate_dt', 'source', 'clean_title', 'clean_desc', 'risk_level', 'link', 'search_keyword']], log_messages
 
 # 4. UI 구성
 with st.sidebar:
-    st.header("🕸️ 통합 모니터링 설정")
+    st.header("✨ 최근 30일 모니터링")
     
-    # 기본 검색어 세팅
-    default_keywords = "로얄캐닌, 로캐, 로케, ㄹㅇㅋㄴ, royal canin"
-    keyword_input = st.text_input("검색어 (콤마로 구분)", value=default_keywords)
+    default_keywords = "로얄캐닌, 로캐, 로케, ㄹㅇㅋㄴ"
+    keyword_input = st.text_input("검색어 (콤마 구분)", value=default_keywords)
     
     st.markdown("---")
     st.caption("카페 필터")
@@ -138,15 +137,15 @@ with st.sidebar:
     st.markdown("---")
     client_id = st.text_input("Client ID", type="password")
     client_secret = st.text_input("Secret", type="password")
-    run_btn = st.button("모니터링 시작")
+    run_btn = st.button("최신 데이터만 가져오기")
 
-st.title(f"🕸️ '{keyword_input}' 통합 타임라인")
+st.title(f"✨ '{keyword_input}' 클린 타임라인 (30일 이내)")
 
 if run_btn:
     if not client_id or not client_secret:
         st.error("⚠️ API 키를 입력해주세요.")
     else:
-        df, logs = get_naver_data_multi_sorted(keyword_input, client_id, client_secret)
+        df, logs = get_naver_data_clean_sorted(keyword_input, client_id, client_secret)
         
         with st.expander("ℹ️ 로그 확인"):
             if logs:
@@ -166,14 +165,14 @@ if run_btn:
             risk_count = len(risk_df)
             top_src = filtered_df['source'].mode()[0] if not filtered_df.empty else "-"
                 
-            col1.metric("전체 글", f"{len(filtered_df)}건")
+            col1.metric("최근 30일 글", f"{len(filtered_df)}건")
             col2.metric("🚨 이슈 글", f"{risk_count}건", delta_color="inverse")
             col3.metric("최다 출처", top_src)
             
             st.markdown("---")
             
-            # 1. 차트
-            st.subheader("📊 일별 언급량 (통합)")
+            # 차트
+            st.subheader("📊 일별 언급량 (최근 30일)")
             chart_df = filtered_df[filtered_df['postdate_dt'].dt.year > 2000]
             if not chart_df.empty:
                 trend_data = chart_df['postdate_dt'].dt.date.value_counts().sort_index()
@@ -181,14 +180,13 @@ if run_btn:
             
             st.markdown("---")
 
-            # 2. 탭
+            # 탭
             tab1, tab2, tab3 = st.tabs(["🔥 리스크 피드", "📊 키워드 통계", "📝 전체 리스트"])
             
             with tab1:
                 if risk_df.empty:
-                    st.success("✅ 위험 단어(구더기, 이물 등)가 포함된 글이 없습니다.")
+                    st.success("✅ 최근 30일 내 위험 단어가 포함된 글이 없습니다.")
                 else:
-                    st.caption(f"👇 '{keyword_input}' 검색 결과 중 위험 단어가 포함된 글 (최신순)")
                     for i, row in risk_df.iterrows():
                         with st.container():
                             if row['postdate_dt'].year == 1900:
@@ -207,7 +205,6 @@ if run_btn:
             
             with tab2:
                 if not filtered_df.empty:
-                    st.write("🔎 키워드별 포착 횟수")
                     st.bar_chart(filtered_df['search_keyword'].value_counts())
 
             with tab3:
@@ -225,8 +222,8 @@ if run_btn:
             st.download_button(
                 label="📥 엑셀 다운로드",
                 data=csv,
-                file_name=f"multi_keyword_monitoring.csv",
+                file_name=f"clean_monitoring.csv",
                 mime="text/csv",
             )
         else:
-            st.warning("결과가 없습니다.")
+            st.warning("최근 30일 내에 작성된 글이 없습니다.")
