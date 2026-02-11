@@ -7,8 +7,8 @@ import re
 
 # 1. 페이지 설정
 st.set_page_config(
-    page_title="Royal Canin Perfect Sort",
-    page_icon="💎",
+    page_title="Royal Canin Unified Monitor",
+    page_icon="👑",
     layout="wide"
 )
 
@@ -18,8 +18,8 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html)
     return cleantext.replace("&quot;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
-# 3. 데이터 수집 및 정렬 함수
-def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secret):
+# 3. 데이터 수집 함수 (키워드 통합 로직 추가)
+def get_data_unified(keyword_string, exclude_string, client_id, client_secret):
     if not client_id or not client_secret:
         return None, []
     
@@ -36,9 +36,11 @@ def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secr
     now = datetime.datetime.now()
     cutoff_date = now - datetime.timedelta(days=30)
     
+    # 통합할 브랜드명 정의
+    unified_brand_name = "로얄캐닌" 
+    
     # [1] 데이터 수집
     for idx, search_term in enumerate(keywords):
-        # 충분한 데이터 확보를 위해 3페이지(300개) 탐색
         for start_index in range(1, 300, 100):
             try:
                 status_area.info(f"🚀 ({idx+1}/{len(keywords)}) '{search_term}' 수집 중...")
@@ -74,7 +76,7 @@ def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secr
                         except:
                             p_date = pd.to_datetime('1900-01-01')
                         
-                        # 30일 필터 (1900년은 일단 살림)
+                        # 30일 필터
                         if p_date.year > 2000 and p_date < cutoff_date:
                             continue 
                         
@@ -90,7 +92,12 @@ def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secr
                         item['clean_title'] = clean_html(item['title'])
                         item['clean_desc'] = clean_html(item['description'])
                         item['postdate_dt'] = p_date
-                        item['search_keyword'] = search_term 
+                        
+                        # [핵심 변경] 검색어(로캐, 로케 등)를 무조건 '로얄캐닌'으로 통일!
+                        # 원래 검색어가 무엇이었는지는 괄호 안에 살짝 남겨둘 수도 있지만, 
+                        # 요청하신 대로 깔끔하게 통합하려면 그냥 덮어쓰는 게 좋습니다.
+                        item['search_keyword'] = unified_brand_name 
+                        
                         all_data.append(item)
                 else:
                     break
@@ -98,7 +105,7 @@ def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secr
                 log_messages.append(f"❌ 에러: {e}")
                 break
     
-    status_area.success(f"✅ 수집 완료! (총 {len(all_data)}개 원본 확보)")
+    status_area.success(f"✅ 수집 및 통합 완료! (총 {len(all_data)}건)")
     
     if not all_data:
         return pd.DataFrame(), log_messages
@@ -116,28 +123,20 @@ def get_data_perfect_sort(keyword_string, exclude_string, client_id, client_secr
 
     df['risk_level'] = df['clean_desc'].apply(check_risk)
     
-    # -------------------------------------------------------------------------
-    # [핵심 수정] 정렬 먼저 하고 -> 그 다음에 중복 제거! (순서 변경)
-    # -------------------------------------------------------------------------
-    
-    # 1. 먼저 날짜순으로 내림차순 정렬 (최신이 맨 위로 오게)
-    # 1900년(날짜없음)은 '현재(Now)'로 취급하여 최상단 배치
+    # [3] 정렬 후 중복 제거 (최신 글 살리기)
     df['sort_helper'] = df['postdate_dt'].apply(lambda x: now if x.year == 1900 else x)
     df = df.sort_values(by='sort_helper', ascending=False)
-    
-    # 2. 정렬된 상태에서 중복 제거 (keep='first'이므로 맨 위에 있는 최신 글이 살아남음)
     df = df.drop_duplicates(['clean_title'], keep='first')
-    
-    # -------------------------------------------------------------------------
     
     return df[['postdate_dt', 'source', 'clean_title', 'clean_desc', 'risk_level', 'link', 'search_keyword']], log_messages
 
 # 4. UI 구성
 with st.sidebar:
-    st.header("💎 순서 완벽 모니터링")
+    st.header("👑 브랜드 통합 모니터링")
     
     default_keywords = "로얄캐닌, 로캐, 로케"
     keyword_input = st.text_input("검색어 (콤마 구분)", value=default_keywords)
+    st.caption("※ 입력한 모든 단어는 결과에서 '로얄캐닌'으로 합쳐집니다.")
     
     st.caption("🚫 제외어")
     exclude_input = st.text_input("제외할 단어", value="ㄹㅇㅋㄴ, 광고, 분양, 팝니다")
@@ -150,15 +149,15 @@ with st.sidebar:
     st.markdown("---")
     client_id = st.text_input("Client ID", type="password")
     client_secret = st.text_input("Secret", type="password")
-    run_btn = st.button("실행")
+    run_btn = st.button("통합 분석 시작")
 
-st.title(f"💎 '{keyword_input}' 퍼펙트 타임라인")
+st.title(f"👑 '로얄캐닌' 통합 타임라인")
 
 if run_btn:
     if not client_id or not client_secret:
         st.error("⚠️ API 키를 입력해주세요.")
     else:
-        df, logs = get_data_perfect_sort(keyword_input, exclude_input, client_id, client_secret)
+        df, logs = get_data_unified(keyword_input, exclude_input, client_id, client_secret)
         
         with st.expander("ℹ️ 로그 확인"):
             if logs:
@@ -172,31 +171,25 @@ if run_btn:
             else:
                 filtered_df = df
             
-            # 요약
             col1, col2, col3 = st.columns(3)
             risk_df = filtered_df[filtered_df['risk_level'] != "일반"]
             
-            # 최신 글 날짜 확인
+            # 최신 글 날짜
             if not filtered_df.empty:
                 latest_date = filtered_df.iloc[0]['postdate_dt']
-                if latest_date.year == 1900:
-                    latest_str = "⚡ 방금 (날짜미상)"
-                else:
-                    latest_str = latest_date.strftime('%Y-%m-%d')
+                latest_str = "⚡ 방금 (날짜미상)" if latest_date.year == 1900 else latest_date.strftime('%Y-%m-%d')
             else:
                 latest_str = "-"
                 
-            col1.metric("수집 글", f"{len(filtered_df)}건")
+            col1.metric("통합 수집량", f"{len(filtered_df)}건")
             col2.metric("🚨 이슈 글", f"{len(risk_df)}건", delta_color="inverse")
             col3.metric("가장 최신 글", latest_str)
             
             st.markdown("---")
             
-            # 탭
-            tab1, tab2, tab3 = st.tabs(["🔥 피드 (시간순)", "📊 통계", "📝 리스트"])
+            tab1, tab2, tab3 = st.tabs(["🔥 피드 (시간순)", "📊 통합 통계", "📝 리스트"])
             
             with tab1:
-                # 통합 피드
                 for i, row in filtered_df.iterrows():
                     with st.container():
                         if row['postdate_dt'].year == 1900:
@@ -206,19 +199,17 @@ if run_btn:
                             date_str = row['postdate_dt'].strftime('%Y-%m-%d')
                             date_color = "gray"
                         
-                        # 위험 글 강조
                         if "🚨" in row['risk_level']:
                             title_prefix = "🚨 "
-                            bg_color = "rgba(255, 0, 0, 0.05)" # 살짝 붉은 배경
                         else:
                             title_prefix = ""
-                            bg_color = "transparent"
 
+                        # [확인 포인트] 이제 검색어 부분이 모두 '로얄캐닌'으로 보일 겁니다.
                         st.markdown(f"**☕ [{row['source']}]** <span style='color:{date_color}'>{date_str}</span>", unsafe_allow_html=True)
                         st.markdown(f"**{title_prefix}{row['clean_title']}**")
                         
                         if "🚨" in row['risk_level']:
-                             st.write(f"⚠️ **{row['risk_level']}** (검색어: {row['search_keyword']})")
+                             st.write(f"⚠️ **{row['risk_level']}**")
                         
                         st.caption(row['clean_desc'])
                         st.markdown(f"[원문 이동]({row['link']})")
@@ -226,14 +217,15 @@ if run_btn:
             
             with tab2:
                 if not filtered_df.empty:
-                    st.write("🔎 **검색어별 비중**")
-                    st.bar_chart(filtered_df['search_keyword'].value_counts())
-                    
-                    st.write("📈 **일별 추이** (날짜 확인된 글)")
+                    st.write("📈 **일별 언급량 추이** (통합 기준)")
                     chart_df = filtered_df[filtered_df['postdate_dt'].dt.year > 2000]
                     if not chart_df.empty:
                         trend_data = chart_df['postdate_dt'].dt.date.value_counts().sort_index()
                         st.area_chart(trend_data, color="#ff4b4b")
+                    
+                    st.write("🔎 **키워드 통계**")
+                    st.write("모든 키워드가 '로얄캐닌'으로 통합되었습니다.")
+                    st.bar_chart(filtered_df['search_keyword'].value_counts())
 
             with tab3:
                 display = filtered_df.copy()
@@ -248,9 +240,9 @@ if run_btn:
             st.markdown("---")
             csv = filtered_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 엑셀 다운로드",
+                label="📥 통합 엑셀 다운로드",
                 data=csv,
-                file_name=f"perfect_sorted_monitoring.csv",
+                file_name=f"unified_monitoring.csv",
                 mime="text/csv",
             )
         else:
