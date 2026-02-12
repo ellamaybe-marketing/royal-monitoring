@@ -1,2 +1,6 @@
 streamlit
 pandas
+matplotlib
+seaborn
+selenium
+webdriver-manager
