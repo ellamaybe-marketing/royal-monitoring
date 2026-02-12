@@ -7,8 +7,8 @@ import re
 
 # 1. 페이지 설정
 st.set_page_config(
-    page_title="Royal Canin 4-Major Monitor",
-    page_icon="🛡️",
+    page_title="Royal Canin Deep Monitor",
+    page_icon="📡",
     layout="wide"
 )
 
@@ -18,8 +18,8 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html)
     return cleantext.replace("&quot;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
-# 3. 데이터 수집 함수 (4대 커뮤니티 외에는 가차 없이 버림)
-def get_data_strict_4_communities(keyword_string, exclude_string, client_id, client_secret):
+# 3. 데이터 수집 함수 (1000개까지 깊게 탐색 + 버리는 데이터 없음)
+def get_data_deep_scan(keyword_string, exclude_string, client_id, client_secret):
     if not client_id or not client_secret:
         return None, []
     
@@ -31,16 +31,27 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
     log_messages = []
     
     status_area = st.empty()
+    progress_bar = st.progress(0)
     
     # 30일 유통기한
     now = datetime.datetime.now()
     cutoff_date = now - datetime.timedelta(days=30)
     
-    # [1] 데이터 수집
-    for idx, search_term in enumerate(keywords):
-        for start_index in range(1, 300, 100):
+    # [설정] 최대 탐색 페이지 수 (10페이지 = 1000개)
+    # 누락을 막기 위해 범위를 대폭 늘렸습니다.
+    MAX_PAGES = 10 
+    
+    total_keywords = len(keywords)
+    
+    for k_idx, search_term in enumerate(keywords):
+        for page in range(1, MAX_PAGES + 1):
+            # 진행률 표시
+            start_index = (page - 1) * 100 + 1
+            progress = (k_idx * MAX_PAGES + page) / (total_keywords * MAX_PAGES)
+            progress_bar.progress(min(progress, 1.0))
+            
             try:
-                status_area.info(f"🛡️ ({idx+1}/{len(keywords)}) '{search_term}' 정밀 탐색 중...")
+                status_area.info(f"📡 '{search_term}' {start_index}~{start_index+99}번째 글 스캔 중...")
                 
                 query_str = search_term
                 if excludes:
@@ -48,7 +59,7 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
                         query_str += f" -{exc}"
                 
                 encText = urllib.parse.quote(query_str)
-                # API에게 최신순 요청
+                # sort=date (최신순 요청)
                 url = f"https://openapi.naver.com/v1/search/{category}?query={encText}&display=100&start={start_index}&sort=date"
                 
                 request = urllib.request.Request(url)
@@ -61,7 +72,7 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
                     data = json.loads(response.read().decode('utf-8'))
                     items = data['items']
                     
-                    if not items: break
+                    if not items: break # 더 이상 글이 없으면 다음 키워드로
 
                     for item in items:
                         # 날짜 변환
@@ -74,35 +85,37 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
                         except:
                             p_date = pd.to_datetime('1900-01-01')
                         
-                        # 30일 지난 글 버리기 (1900년은 살림)
+                        # 30일 지난 글 제외
                         if p_date.year > 2000 and p_date < cutoff_date:
                             continue 
                         
-                        # -----------------------------------------------------------
-                        # [핵심] 4대 커뮤니티 필터링 (여기에 없으면 데이터에 넣지도 않음)
-                        # -----------------------------------------------------------
+                        # 커뮤니티 분류 (4대장 + 기타)
                         raw_name = item.get('cafename', '')
-                        source_label = None
+                        is_target = False
                         
-                        # 포함 단어로 유연하게 매칭
                         if "고양이라서 다행이야" in raw_name or "고다" in raw_name: 
                             source_label = "고양이라서 다행이야"
-                        elif "강사모" in raw_name: # 강사모-반려견... 등등 다 잡음
+                            is_target = True
+                        elif "강사모" in raw_name: 
                             source_label = "강사모"
+                            is_target = True
                         elif "아반강고" in raw_name: 
                             source_label = "아반강고"
+                            is_target = True
                         elif "냥이네" in raw_name: 
                             source_label = "냥이네"
-                        
-                        # source_label이 None이면(4대장이 아니면) -> 저장 안 하고 넘어감 (Skip)
-                        if source_label is None:
-                            continue
+                            is_target = True
+                        else: 
+                            # 누락 확인을 위해 '기타'도 일단 수집은 함 (화면에서 분리)
+                            source_label = f"기타 ({raw_name})"
+                            is_target = False
 
                         item['source'] = source_label
+                        item['is_target'] = is_target # 4대 커뮤니티 여부 태그
                         item['clean_title'] = clean_html(item['title'])
                         item['clean_desc'] = clean_html(item['description'])
                         item['postdate_dt'] = p_date
-                        item['search_keyword'] = "로얄캐닌" # 키워드 통합
+                        item['search_keyword'] = "로얄캐닌"
                         
                         all_data.append(item)
                 else:
@@ -111,14 +124,15 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
                 log_messages.append(f"❌ 에러: {e}")
                 break
     
-    status_area.success(f"✅ 4대 커뮤니티 데이터 {len(all_data)}건 확보 완료!")
+    status_area.success(f"✅ 스캔 완료! 총 {len(all_data)}개 글을 확보했습니다.")
+    progress_bar.empty()
     
     if not all_data:
         return pd.DataFrame(), log_messages
 
     df = pd.DataFrame(all_data)
     
-    # [2] 위험 키워드
+    # 위험 키워드
     risk_keywords = ['벌레', '이물', '구더기', '회수', '식약처', '신고', '환불', '토해', '설사', '혈변', '곰팡이', '충격', '실망', '배신', '리콜']
     
     def check_risk(text):
@@ -129,45 +143,39 @@ def get_data_strict_4_communities(keyword_string, exclude_string, client_id, cli
 
     df['risk_level'] = df['clean_desc'].apply(check_risk)
     
-    # [3] 통합 정렬 및 중복 제거
-    # 1900년(날짜없음)을 '현재'로 치환해서 최상단으로 올림
+    # [정렬] 날짜순 (1900년은 최신으로)
     df['sort_helper'] = df['postdate_dt'].apply(lambda x: now if x.year == 1900 else x)
-    
-    # 1차 정렬 (최신순)
     df = df.sort_values(by='sort_helper', ascending=False)
     
-    # 중복 제거 (가장 최신의 것을 남김)
+    # [중복 제거]
     df = df.drop_duplicates(['clean_title'], keep='first')
     
-    return df[['postdate_dt', 'source', 'clean_title', 'clean_desc', 'risk_level', 'link', 'search_keyword', 'sort_helper']], log_messages
+    return df[['postdate_dt', 'source', 'is_target', 'clean_title', 'clean_desc', 'risk_level', 'link', 'search_keyword', 'sort_helper']], log_messages
 
 # 4. UI 구성
 with st.sidebar:
-    st.header("🛡️ 4대 커뮤니티 전용")
+    st.header("📡 딥 스캔 모니터링")
+    st.caption("누락 방지를 위해 더 깊게(10페이지) 검색합니다.")
     
     default_keywords = "로얄캐닌, 로캐, 로케"
     keyword_input = st.text_input("검색어", value=default_keywords)
     
-    st.caption("🚫 제외어")
-    exclude_input = st.text_input("제외할 단어", value="ㄹㅇㅋㄴ, 광고, 분양, 팝니다")
+    exclude_input = st.text_input("제외어", value="ㄹㅇㅋㄴ, 광고, 분양, 팝니다")
     
     st.markdown("---")
-    st.info("⚠️ 이 모드는 '고다, 냥이네, 강사모, 아반강고' 글만 보여줍니다. 다른 잡다한 카페 글은 자동으로 삭제됩니다.")
-    
     client_id = st.text_input("Client ID", type="password")
     client_secret = st.text_input("Secret", type="password")
-    run_btn = st.button("분석 시작")
+    run_btn = st.button("정밀 분석 시작")
 
-st.title(f"🛡️ '{keyword_input}' 커뮤니티 집중 분석")
+st.title(f"📡 '{keyword_input}' 정밀 타임라인")
 
-# 게시글 리스트 함수 (정렬 강제 적용)
-def render_feed_strictly_sorted(dataframe):
+# 피드 렌더링 함수 (무조건 재정렬)
+def render_feed(dataframe):
     if dataframe.empty:
-        st.info("이 커뮤니티에는 조건에 맞는 글이 없습니다.")
+        st.warning("표시할 데이터가 없습니다.")
         return
 
-    # [핵심] 여기서 한 번 더 날짜순으로 줄을 세워버림 (절대 섞이지 않게)
-    # sort_helper 기준 내림차순
+    # 화면에 그리기 직전에 다시 한번 정렬 (탭 간 이동 시 꼬임 방지)
     sorted_df = dataframe.sort_values(by='sort_helper', ascending=False)
 
     for i, row in sorted_df.iterrows():
@@ -198,7 +206,7 @@ if run_btn:
     if not client_id or not client_secret:
         st.error("⚠️ API 키를 입력해주세요.")
     else:
-        df, logs = get_data_strict_4_communities(keyword_input, exclude_input, client_id, client_secret)
+        df, logs = get_data_deep_scan(keyword_input, exclude_input, client_id, client_secret)
         
         with st.expander("ℹ️ 로그 확인"):
             if logs:
@@ -206,71 +214,61 @@ if run_btn:
 
         if df is not None and not df.empty:
             
-            col1, col2, col3 = st.columns(3)
-            risk_count = len(df[df['risk_level'] != "일반"])
+            # 4대 커뮤니티 데이터만 필터링
+            target_df = df[df['is_target'] == True]
+            # 기타 데이터 (누락 확인용)
+            other_df = df[df['is_target'] == False]
             
-            # 최신 글 날짜 (정렬 후 0번째)
-            if not df.empty:
-                latest_date = df.iloc[0]['postdate_dt']
+            col1, col2, col3 = st.columns(3)
+            risk_count = len(target_df[target_df['risk_level'] != "일반"])
+            
+            if not target_df.empty:
+                latest_date = target_df.iloc[0]['postdate_dt']
                 latest_str = "⚡ 방금" if latest_date.year == 1900 else latest_date.strftime('%Y-%m-%d')
             else:
                 latest_str = "-"
                 
-            col1.metric("4대 커뮤니티 수집", f"{len(df)}건")
-            col2.metric("🚨 이슈 글", f"{risk_count}건", delta_color="inverse")
+            col1.metric("4대 커뮤니티 글", f"{len(target_df)}건")
+            col2.metric("🚨 이슈 발견", f"{risk_count}건", delta_color="inverse")
             col3.metric("가장 최신 글", latest_str)
             
             st.markdown("---")
             
-            # 탭 구성
-            tab_all, tab_goda, tab_nyang, tab_kang, tab_aban, tab_stats = st.tabs([
-                "🔥 전체 보기 (최신순)", 
+            # 탭 구성 (기타 탭 추가됨!)
+            tabs = st.tabs([
+                "🔥 전체 (4대장)", 
                 "😺 고다", 
                 "😺 냥이네", 
                 "🐶 강사모", 
                 "🐶 아반강고",
-                "📊 다운로드"
+                "🗑️ 기타/제외된 글 (누락확인)" 
             ])
             
-            # 1. 전체 보기
-            with tab_all:
-                st.caption("4대 커뮤니티의 모든 글을 시간순으로 보여줍니다.")
-                render_feed_strictly_sorted(df)
+            # 1. 전체 (4대 커뮤니티만)
+            with tabs[0]:
+                render_feed(target_df)
             
             # 2. 고다
-            with tab_goda:
-                df_goda = df[df['source'] == "고양이라서 다행이야"]
-                render_feed_strictly_sorted(df_goda)
+            with tabs[1]:
+                render_feed(target_df[target_df['source'] == "고양이라서 다행이야"])
             
             # 3. 냥이네
-            with tab_nyang:
-                df_nyang = df[df['source'] == "냥이네"]
-                render_feed_strictly_sorted(df_nyang)
+            with tabs[2]:
+                render_feed(target_df[target_df['source'] == "냥이네"])
             
             # 4. 강사모
-            with tab_kang:
-                df_kang = df[df['source'] == "강사모"]
-                render_feed_strictly_sorted(df_kang)
+            with tabs[3]:
+                render_feed(target_df[target_df['source'] == "강사모"])
 
             # 5. 아반강고
-            with tab_aban:
-                df_aban = df[df['source'] == "아반강고"]
-                render_feed_strictly_sorted(df_aban)
-                
-            # 6. 다운로드
-            with tab_stats:
-                st.subheader("📥 엑셀 다운로드")
-                csv = df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="통합 데이터 다운로드",
-                    data=csv,
-                    file_name="4_communities_monitoring.csv",
-                    mime="text/csv",
-                )
-                
-                st.markdown("---")
-                st.subheader("📊 커뮤니티 비중")
-                st.bar_chart(df['source'].value_counts())
+            with tabs[4]:
+                render_feed(target_df[target_df['source'] == "아반강고"])
+            
+            # 6. 기타 (누락된 게 여기 있나 확인용)
+            with tabs[5]:
+                st.warning("👇 여기는 4대 커뮤니티가 아니라서 메인 화면에서 제외된 글들입니다.")
+                st.info("만약 '고다' 글인데 여기에 와있다면, 카페 이름 인식이 잘못된 것입니다.")
+                render_feed(other_df)
 
         else:
-            st.warning("조건에 맞는 4대 커뮤니티 글이 없습니다.")
+            st.warning("수집된 데이터가 없습니다.")
